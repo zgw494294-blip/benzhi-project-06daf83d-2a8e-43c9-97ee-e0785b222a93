@@ -95,6 +95,18 @@ func ValidateTrial(c *ClearanceCase, trial TrialLift, now time.Time) error {
 			if stage.CompletedAt.Before(trial.StartedAt) || stage.CompletedAt.After(trial.DeadlineAt) || stage.CompletedAt.After(now) || (!prior.IsZero() && !stage.CompletedAt.After(prior)) {
 				return Rule("TRIAL_STAGE_TIME_INVALID", "试吊阶段完成时间必须在窗口内严格递增")
 			}
+			// 声明时长必须与实际记录的时间边界一致：阶段按顺序进行，
+			// 每个阶段的完成时间相对前一阶段完成（或开始时间）至少应达到声明的持续时间，
+			// 否则声明时长与记录边界相互矛盾，应拒绝该试吊证据。
+			stageStart := trial.StartedAt
+			if !prior.IsZero() {
+				stageStart = prior
+			}
+			elapsed := stage.CompletedAt.Sub(stageStart)
+			declared := time.Duration(stage.DurationSec) * time.Second
+			if elapsed+time.Second < declared {
+				return Rule("TRIAL_STAGE_TIME_INVALID", "试吊阶段声明时长与实际记录的完成时间边界不一致")
+			}
 			prior = *stage.CompletedAt
 		} else if c.TrialStandard != nil {
 			return Rule("TRIAL_STAGE_TIME_REQUIRED", "使用主管确认标准时必须记录每个试吊阶段的完成时间")
@@ -128,6 +140,19 @@ func EvaluateTrial(c *ClearanceCase, trial TrialLift, now time.Time) []TrialFail
 		}
 		if !observation.Stable {
 			failures = append(failures, TrialFailure{Code: "STAGE_UNSTABLE", Stage: observation.Stage, Reason: "阶段观测不稳定"})
+		}
+		// 声明时长必须与实际记录的时间边界一致：阶段按顺序进行，每个阶段的完成时间相对前一阶段完成（或开始时间）
+		// 至少应达到声明的持续时间，否则声明时长与记录边界矛盾，应判定失败并阻止进入 freeze_ready。
+		if observation.CompletedAt != nil {
+			stageStart := trial.StartedAt
+			if i > 0 && trial.StageObservations[i-1].CompletedAt != nil {
+				stageStart = *trial.StageObservations[i-1].CompletedAt
+			}
+			elapsed := observation.CompletedAt.Sub(stageStart)
+			declared := time.Duration(observation.DurationSec) * time.Second
+			if elapsed+time.Second < declared {
+				failures = append(failures, TrialFailure{Code: "STAGE_DURATION_INCONSISTENT", Stage: observation.Stage, Reason: "阶段声明时长与实际记录的完成时间边界不一致", Actual: int64(elapsed.Seconds()), Threshold: int64(observation.DurationSec)})
+			}
 		}
 	}
 	full, hold := trial.StageObservations[2].DeflectionMM, trial.StageObservations[3].DeflectionMM
