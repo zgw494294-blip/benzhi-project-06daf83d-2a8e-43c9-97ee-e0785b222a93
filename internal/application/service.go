@@ -55,6 +55,10 @@ func (s *Service) Create(cmd CreateCase) (*rigging.ClearanceCase, error) {
 	if cmd.PerformanceAt.IsZero() {
 		return nil, &Error{Code: "FIELD_REQUIRED", Message: "performanceAt 不能为空", Status: 400}
 	}
+	request := cmd
+	if prior, found, err := s.replay(cmd.IdempotencyKey, request); err != nil || found {
+		return prior, err
+	}
 	if cmd.ID == "" {
 		cmd.ID = newID("case")
 	}
@@ -62,7 +66,7 @@ func (s *Service) Create(cmd CreateCase) (*rigging.ClearanceCase, error) {
 	if err != nil {
 		return nil, normalize(err)
 	}
-	return s.commit(cmd.CommandMeta, []rigging.Event{event}, cmd)
+	return s.commit(cmd.CommandMeta, []rigging.Event{event}, request)
 }
 
 func (s *Service) commit(meta CommandMeta, events []rigging.Event, request any) (*rigging.ClearanceCase, error) {

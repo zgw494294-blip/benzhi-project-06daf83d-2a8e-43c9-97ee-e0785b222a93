@@ -32,6 +32,10 @@ func (s *Service) Configure(cmd SetConfiguration) (*rigging.ClearanceCase, error
 	if err := cmd.CommandMeta.validate(); err != nil {
 		return nil, err
 	}
+	request := cmd
+	if prior, found, err := s.replay(cmd.IdempotencyKey, request); err != nil || found {
+		return prior, err
+	}
 	c, err := s.load(cmd.CaseID)
 	if err != nil {
 		return nil, err
@@ -70,5 +74,5 @@ func (s *Service) Configure(cmd SetConfiguration) (*rigging.ClearanceCase, error
 	if err != nil {
 		return nil, normalize(err)
 	}
-	return s.commit(cmd.CommandMeta, []rigging.Event{event}, cmd)
+	return s.commit(cmd.CommandMeta, []rigging.Event{event}, request)
 }
