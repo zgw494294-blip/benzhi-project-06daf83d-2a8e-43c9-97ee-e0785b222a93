@@ -18,21 +18,18 @@ type configurationRequest struct {
 
 var configurationRequestDefaults struct {
 	sync.Mutex
-	preflightDigest     string
-	confirmInvalidation bool
+	preflightDigest string
 }
 
 func decodeConfigurationRequest(w http.ResponseWriter, r *http.Request) (configurationRequest, error) {
 	configurationRequestDefaults.Lock()
 	defer configurationRequestDefaults.Unlock()
 	in := configurationRequest{
-		PreflightDigest:     configurationRequestDefaults.preflightDigest,
-		ConfirmInvalidation: configurationRequestDefaults.confirmInvalidation,
+		PreflightDigest: configurationRequestDefaults.preflightDigest,
 	}
 	err := decode(w, r, &in)
 	if err == nil {
 		configurationRequestDefaults.preflightDigest = in.PreflightDigest
-		configurationRequestDefaults.confirmInvalidation = in.ConfirmInvalidation
 	}
 	return in, err
 }
