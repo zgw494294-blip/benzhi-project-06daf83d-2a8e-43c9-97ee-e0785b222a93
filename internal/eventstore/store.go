@@ -2,6 +2,7 @@ package eventstore
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
@@ -34,6 +35,7 @@ func (*IdempotencyConflict) Error() string { return "idempotencyKey 已用于不
 type Store struct {
 	mu                         sync.Mutex
 	dir, logPath, snapshotPath string
+	lockPath                   string
 	sequence                   uint64
 	lastDigest                 string
 	cases                      map[string]*rigging.ClearanceCase
@@ -41,16 +43,43 @@ type Store struct {
 	audits                     map[string][]rigging.AuditEvent
 }
 
+// withLock acquires an exclusive flock on the sidecar lock file, runs fn, and
+// releases the lock. It serializes commits across any number of service
+// instances that share the same data directory: while one instance holds the
+// lock, another's Commit blocks (in its own withLock call) rather than
+// interleaving writes. The in-process mutex above still serializes goroutines
+// within a single process. Open also uses this for its initial replay so the
+// startup view is consistent with any in-flight committers.
+func (s *Store) withLock(fn func() error) error {
+	lf, err := os.OpenFile(s.lockPath, os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return err
+	}
+	defer lf.Close()
+	if err = acquireLock(int(lf.Fd())); err != nil {
+		return err
+	}
+	defer releaseLock(int(lf.Fd()))
+	return fn()
+}
+
 func Open(dir string) (*Store, error) {
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return nil, err
 	}
-	s := &Store{dir: dir, logPath: filepath.Join(dir, "events.log"), snapshotPath: filepath.Join(dir, "projection.json"), cases: map[string]*rigging.ClearanceCase{}, idempotency: map[string]IdempotencyRecord{}, audits: map[string][]rigging.AuditEvent{}}
-	saved, err := readSnapshot(s.snapshotPath)
-	if err != nil {
-		return nil, err
-	}
-	if err := s.replay(); err != nil {
+	s := &Store{dir: dir, logPath: filepath.Join(dir, "events.log"), snapshotPath: filepath.Join(dir, "projection.json"), lockPath: filepath.Join(dir, ".lock"), cases: map[string]*rigging.ClearanceCase{}, idempotency: map[string]IdempotencyRecord{}, audits: map[string][]rigging.AuditEvent{}}
+	var saved *snapshot
+	if err := s.withLock(func() error {
+		if err := s.replay(); err != nil {
+			return err
+		}
+		snap, err := readSnapshot(s.snapshotPath)
+		if err != nil {
+			return err
+		}
+		saved = snap
+		return nil
+	}); err != nil {
 		return nil, err
 	}
 	if saved != nil {
@@ -67,7 +96,20 @@ func Open(dir string) (*Store, error) {
 	return s, nil
 }
 
+// Close is retained for API completeness; the cross-process lock is acquired
+// and released per commit, so there is no persistent resource to release.
+func (s *Store) Close() error { return nil }
+
+// replay re-reads the entire event log from disk and rebuilds the in-memory
+// projection, sequence counter and chain digest. It is safe to call again at
+// any time: it resets the projection before re-applying frames so that repeated
+// calls do not accumulate duplicate state.
 func (s *Store) replay() error {
+	s.sequence = 0
+	s.lastDigest = ""
+	s.cases = map[string]*rigging.ClearanceCase{}
+	s.idempotency = map[string]IdempotencyRecord{}
+	s.audits = map[string][]rigging.AuditEvent{}
 	f, err := os.Open(s.logPath)
 	if os.IsNotExist(err) {
 		return nil
@@ -160,52 +202,84 @@ func (s *Store) Commit(expected int, events []rigging.Event, actor, key string, 
 		clone, e := rigging.Clone(c)
 		return clone, true, e
 	}
-	caseID := events[0].CaseID
-	c := s.cases[caseID]
-	actual := 0
-	if c != nil {
-		actual = c.Version
-	}
-	if expected != actual {
-		return nil, false, &VersionConflict{Expected: expected, Actual: actual}
-	}
-	working := &rigging.ClearanceCase{}
-	if c != nil {
-		working, err = rigging.Clone(c)
-		if err != nil {
-			return nil, false, err
+	// Hold the cross-process lock for the whole reconcile→append→snapshot
+	// sequence so two instances sharing this data directory never write from
+	// the same sequence tip or interleave frame bytes in the log. withLock
+	// blocks until any other committer (in this or another process) releases.
+	var result *rigging.ClearanceCase
+	var replayed bool
+	if err = s.withLock(func() error {
+		// Another instance sharing this data directory may have appended and
+		// snapshotted frames while we waited for the exclusive lock. Reconcile
+		// the in-memory sequence, chain digest and projection with the log on
+		// disk before validating expectedVersion or building a new frame, so we
+		// never write a duplicate sequence or a PreviousDigest that chains onto
+		// a stale tip. replay() also rebuilds idempotency, which makes the
+		// prior-key check reflect requests already committed by the other
+		// instance.
+		if err := s.replay(); err != nil {
+			return err
 		}
-	}
-	for _, event := range events {
-		if event.CaseID != caseID {
-			return nil, false, errors.New("一次提交不能跨档案")
+		if prior, ok := s.idempotency[key]; ok {
+			if prior.RequestDigest != requestDigest {
+				return &IdempotencyConflict{}
+			}
+			c := s.cases[prior.CaseID]
+			clone, e := rigging.Clone(c)
+			result, replayed = clone, true
+			return e
 		}
-		if err = rigging.Apply(working, event); err != nil {
-			return nil, false, err
+		caseID := events[0].CaseID
+		c := s.cases[caseID]
+		actual := 0
+		if c != nil {
+			actual = c.Version
 		}
+		if expected != actual {
+			return &VersionConflict{Expected: expected, Actual: actual}
+		}
+		working := &rigging.ClearanceCase{}
+		if c != nil {
+			working, err = rigging.Clone(c)
+			if err != nil {
+				return err
+			}
+		}
+		for _, event := range events {
+			if event.CaseID != caseID {
+				return errors.New("一次提交不能跨档案")
+			}
+			if err = rigging.Apply(working, event); err != nil {
+				return err
+			}
+		}
+		frame := Frame{SchemaVersion: schemaVersion, Sequence: s.sequence + 1, PreviousDigest: s.lastDigest, Events: events}
+		for _, event := range events {
+			payloadSum := sha256.Sum256(event.Data)
+			frame.Audits = append(frame.Audits, rigging.AuditEvent{Sequence: frame.Sequence, CaseID: caseID, EventType: event.Type, Actor: actor, OccurredAt: event.OccurredAt, IdempotencyKey: key, PayloadDigest: hex.EncodeToString(payloadSum[:]), PreviousDigest: s.lastDigest})
+		}
+		frame.Idempotency = &IdempotencyRecord{Key: key, RequestDigest: requestDigest, CaseID: caseID, Version: working.Version}
+		if err = sealFrame(&frame); err != nil {
+			return err
+		}
+		if err = s.appendFrame(frame); err != nil {
+			return err
+		}
+		if err = s.applyFrame(frame); err != nil {
+			return err
+		}
+		s.sequence = frame.Sequence
+		s.lastDigest = frame.Checksum
+		if err = s.saveSnapshot(); err != nil {
+			return err
+		}
+		clone, err := rigging.Clone(working)
+		result = clone
+		return err
+	}); err != nil {
+		return result, replayed, err
 	}
-	frame := Frame{SchemaVersion: schemaVersion, Sequence: s.sequence + 1, PreviousDigest: s.lastDigest, Events: events}
-	for _, event := range events {
-		payloadSum := sha256.Sum256(event.Data)
-		frame.Audits = append(frame.Audits, rigging.AuditEvent{Sequence: frame.Sequence, CaseID: caseID, EventType: event.Type, Actor: actor, OccurredAt: event.OccurredAt, IdempotencyKey: key, PayloadDigest: hex.EncodeToString(payloadSum[:]), PreviousDigest: s.lastDigest})
-	}
-	frame.Idempotency = &IdempotencyRecord{Key: key, RequestDigest: requestDigest, CaseID: caseID, Version: working.Version}
-	if err = sealFrame(&frame); err != nil {
-		return nil, false, err
-	}
-	if err = s.appendFrame(frame); err != nil {
-		return nil, false, err
-	}
-	if err = s.applyFrame(frame); err != nil {
-		return nil, false, err
-	}
-	s.sequence = frame.Sequence
-	s.lastDigest = frame.Checksum
-	if err = s.saveSnapshot(); err != nil {
-		return nil, false, err
-	}
-	clone, err := rigging.Clone(working)
-	return clone, false, err
+	return result, replayed, nil
 }
 
 // Replay returns the result of an already committed request before domain
@@ -234,15 +308,21 @@ func (s *Store) appendFrame(frame Frame) error {
 	if err != nil {
 		return err
 	}
+	// Build the complete on-disk frame — length prefix and JSON body — in a
+	// single buffer so it is written with one Write call. Combined with the
+	// exclusive flock held by Commit, this guarantees that frames from
+	// concurrent committers never interleave byte ranges within the log.
+	var buf bytes.Buffer
+	if err = binary.Write(&buf, binary.BigEndian, uint32(len(b))); err != nil {
+		return err
+	}
+	buf.Write(b)
 	f, err := os.OpenFile(s.logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
-	if err = binary.Write(f, binary.BigEndian, uint32(len(b))); err != nil {
-		return err
-	}
-	if _, err = f.Write(b); err != nil {
+	if _, err = f.Write(buf.Bytes()); err != nil {
 		return err
 	}
 	return f.Sync()
