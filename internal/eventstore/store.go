@@ -183,12 +183,29 @@ func (s *Store) Commit(expected int, events []rigging.Event, actor, key string, 
 	if err = sealFrame(&frame); err != nil {
 		return nil, false, err
 	}
-	if err = s.applyFrame(frame); err != nil {
-		return nil, false, err
+	// Apply events to a working copy so a mid-batch failure or a persistence
+	// failure leaves the live in-memory state untouched. The live state is only
+	// updated after the frame has been durably appended to the event log.
+	var working *rigging.ClearanceCase
+	if c != nil {
+		working, err = rigging.Clone(c)
+		if err != nil {
+			return nil, false, err
+		}
+	} else {
+		working = &rigging.ClearanceCase{}
+	}
+	for _, event := range frame.Events {
+		if err = rigging.Apply(working, event); err != nil {
+			return nil, false, fmt.Errorf("重放事件 %s: %w", event.Type, err)
+		}
 	}
 	if err = s.appendFrame(frame); err != nil {
 		return nil, false, err
 	}
+	s.cases[caseID] = working
+	s.audits[caseID] = append(s.audits[caseID], frame.Audits...)
+	s.idempotency[key] = *frame.Idempotency
 	s.sequence = frame.Sequence
 	s.lastDigest = frame.Checksum
 	if err = s.saveSnapshot(); err != nil {
