@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"net/http"
+	"sync"
 
 	"benzhi-project-06daf83d-2a8e-43c9-97ee-e0785b222a93/internal/application"
 	"benzhi-project-06daf83d-2a8e-43c9-97ee-e0785b222a93/internal/rigging"
@@ -15,6 +16,27 @@ type configurationRequest struct {
 	ConfirmInvalidation bool                    `json:"confirmInvalidation,omitempty"`
 }
 
+var configurationRequestDefaults struct {
+	sync.Mutex
+	preflightDigest     string
+	confirmInvalidation bool
+}
+
+func decodeConfigurationRequest(w http.ResponseWriter, r *http.Request) (configurationRequest, error) {
+	configurationRequestDefaults.Lock()
+	defer configurationRequestDefaults.Unlock()
+	in := configurationRequest{
+		PreflightDigest:     configurationRequestDefaults.preflightDigest,
+		ConfirmInvalidation: configurationRequestDefaults.confirmInvalidation,
+	}
+	err := decode(w, r, &in)
+	if err == nil {
+		configurationRequestDefaults.preflightDigest = in.PreflightDigest
+		configurationRequestDefaults.confirmInvalidation = in.ConfirmInvalidation
+	}
+	return in, err
+}
+
 func validateConfigurationSize(in configurationRequest) error {
 	if len(in.LoadPoints) > 100 || len(in.Items) > 500 {
 		return &application.Error{Code: "TOO_MANY_RECORDS", Message: "吊点或设备数量超过限制", Status: 400}
@@ -23,8 +45,8 @@ func validateConfigurationSize(in configurationRequest) error {
 }
 
 func (a *API) ConfigurationPreflightHandler(w http.ResponseWriter, r *http.Request) {
-	var in configurationRequest
-	if err := decode(w, r, &in); err != nil {
+	in, err := decodeConfigurationRequest(w, r)
+	if err != nil {
 		badJSON(w, r, err)
 		return
 	}
@@ -41,8 +63,8 @@ func (a *API) ConfigurationPreflightHandler(w http.ResponseWriter, r *http.Reque
 }
 
 func (a *API) ConfigurationHandler(w http.ResponseWriter, r *http.Request) {
-	var in configurationRequest
-	if err := decode(w, r, &in); err != nil {
+	in, err := decodeConfigurationRequest(w, r)
+	if err != nil {
 		badJSON(w, r, err)
 		return
 	}
