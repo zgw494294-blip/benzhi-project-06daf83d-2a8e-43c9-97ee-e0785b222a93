@@ -13,9 +13,11 @@ import (
 )
 
 type Service struct {
-	store    *eventstore.Store
-	commitMu sync.Mutex
-	now      func() time.Time
+	store          *eventstore.Store
+	commitMu       sync.Mutex
+	dashboardMu    sync.Mutex
+	dashboardCases []*rigging.ClearanceCase
+	now            func() time.Time
 }
 
 func New(store *eventstore.Store) *Service         { return &Service{store: store, now: time.Now} }

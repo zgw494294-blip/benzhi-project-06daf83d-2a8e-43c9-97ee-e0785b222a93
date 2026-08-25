@@ -84,9 +84,16 @@ func (s *Service) Dashboard(filter CaseListFilter) (CaseDashboard, error) {
 	if filter.PerformanceFrom != nil && filter.PerformanceTo != nil && filter.PerformanceTo.Before(*filter.PerformanceFrom) {
 		return CaseDashboard{}, &Error{Code: "INVALID_PERFORMANCE_WINDOW", Message: "performanceTo 不能早于 performanceFrom", Status: 400}
 	}
-	all, err := s.store.List()
-	if err != nil {
-		return CaseDashboard{}, normalize(err)
+	s.dashboardMu.Lock()
+	defer s.dashboardMu.Unlock()
+	all := s.dashboardCases
+	if all == nil {
+		var err error
+		all, err = s.store.List()
+		if err != nil {
+			return CaseDashboard{}, normalize(err)
+		}
+		s.dashboardCases = all
 	}
 	counts := map[rigging.RiskLevel]int{rigging.RiskNormal: 0, rigging.RiskNear: 0, rigging.RiskUrgent: 0, rigging.RiskOverdue: 0, rigging.RiskReleased: 0}
 	result := CaseDashboard{Statistics: RiskStatistics{Counts: counts}}
@@ -116,7 +123,11 @@ func (s *Service) Dashboard(filter CaseListFilter) (CaseDashboard, error) {
 		if filter.RiskLevel != "" && string(risk.Level) != filter.RiskLevel {
 			continue
 		}
-		result.Cases = append(result.Cases, CaseListItem{ClearanceCase: c, Risk: risk})
+		caseCopy, err := rigging.Clone(c)
+		if err != nil {
+			return CaseDashboard{}, normalize(err)
+		}
+		result.Cases = append(result.Cases, CaseListItem{ClearanceCase: caseCopy, Risk: risk})
 	}
 	priority := map[rigging.RiskLevel]int{rigging.RiskOverdue: 0, rigging.RiskUrgent: 1, rigging.RiskNear: 2, rigging.RiskNormal: 3, rigging.RiskReleased: 4}
 	sort.SliceStable(result.Cases, func(i, j int) bool {
