@@ -1,0 +1,22 @@
+.risk-filter {
+  padding: 10px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  border-radius: 6px;
+}
+.risk-filter label { font-size: 12px; margin: 7px 0; }
+.risk-filter .grid { grid-template-columns: 1fr; }
+.risk-statistics { display: flex; flex-wrap: wrap; gap: 5px; margin: 12px 0; }
+.risk-count, .risk-badge { font-size: 11px; padding: 3px 7px; border-radius: 99px; background: #e6e3da; }
+.risk-overdue, .risk-urgent { background: #f5d8d4; color: #86241f; }
+.risk-near { background: #f7e7c9; color: #87470d; }
+.risk-normal { background: var(--green2); color: var(--green); }
+.risk-released { background: #e0e5e3; color: #42504b; }
+.risk-reason { display: block; color: var(--red); margin-top: 4px; }
+.preflight-result { margin-top: 14px; }
+.preflight-card, .subpanel { border: 1px solid var(--line); background: #f8f6ef; padding: 14px; border-radius: 6px; }
+.diff-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.diff-table th, .diff-table td { border-bottom: 1px solid var(--line); padding: 7px; text-align: left; }
+.warning { color: var(--red); font-weight: 700; }
+.round { border-top: 1px solid var(--line); padding: 8px 0; font-size: 13px; }
+.round:first-child { border-top: 0; }

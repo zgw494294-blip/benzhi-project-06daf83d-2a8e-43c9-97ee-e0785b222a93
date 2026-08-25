@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>舞台吊挂开演安全放行台</title>
+  <link rel="stylesheet" href="/app.css">
+  <link rel="stylesheet" href="/features.css">
+</head>
+<body>
+  <header class="masthead">
+    <div><p class="eyebrow">STAGE RIGGING CONTROL</p><h1>舞台吊挂开演安全放行台</h1></div>
+    <div id="health" class="health" aria-live="polite">正在连接…</div>
+  </header>
+  <main>
+    <aside class="sidebar" aria-label="放行档案列表">
+      <button id="new-case" class="primary">＋ 新建放行档案</button>
+      <h2>放行风险看板</h2>
+      <form id="risk-filter" class="risk-filter">
+        <label>风险等级<select name="riskLevel"><option value="">全部风险</option><option value="overdue">已逾期</option><option value="urgent">紧急</option><option value="near">临近</option><option value="normal">正常</option><option value="released">已放行</option></select></label>
+        <label>状态<select name="status"><option value="">全部状态</option><option value="draft">草拟</option><option value="inspection">双人检查</option><option value="remediation">整改</option><option value="trial_ready">试吊就绪</option><option value="freeze_ready">可冻结</option><option value="frozen">已冻结</option><option value="released">已放行</option></select></label>
+        <label>场地<input name="venue" maxlength="120" placeholder="精确场地名称"></label>
+        <div class="grid"><label>演出开始<input name="performanceFrom" type="datetime-local"></label><label>演出结束<input name="performanceTo" type="datetime-local"></label></div>
+        <button>应用筛选</button>
+      </form>
+      <div id="risk-statistics" class="risk-statistics"></div>
+      <h2>放行档案</h2><div id="case-list" class="case-list"></div>
+      <form id="verify-form" class="verify-box">
+        <label for="credential-number">凭据编号核验</label>
+        <div class="row"><input id="credential-number" required placeholder="RC-…"><button>核验</button></div>
+      </form>
+    </aside>
+    <section class="workspace">
+      <div id="notice" class="notice" hidden tabindex="-1"></div>
+      <section id="welcome" class="empty"><h2>把每一次开演建立在可核验的事实之上</h2><p>创建或选择一份档案，依次完成载荷登记、双人检查、问题整改、试吊、冻结和签发。</p></section>
+      <form id="create-form" class="panel" hidden>
+        <div class="panel-title"><div><span class="step">建档</span><h2>创建开演放行档案</h2></div></div>
+        <div class="grid"><label>档案标题<input name="title" required maxlength="120"></label><label>场地<input name="venue" required maxlength="120"></label><label>演出时间<input name="performanceAt" type="datetime-local" required></label><label>舞台机械主管<input name="managerName" required maxlength="80"></label></div>
+        <label>当前操作人<input name="actor" required maxlength="80"></label><button class="primary">建立档案</button>
+      </form>
+      <div id="case-view" hidden>
+        <section class="case-head"><div><p id="case-venue" class="eyebrow"></p><h2 id="case-title"></h2><p id="case-meta" class="muted"></p></div><div><span id="case-status" class="status"></span><p id="case-version" class="version"></p></div></section>
+        <section class="panel"><h3>当前门禁与待办</h3><ol id="tasks" class="tasks"></ol></section>
+        <details class="panel" open><summary><span class="step">01</span> 载荷配置</summary>
+          <p class="hint">吊点和设备使用 JSON 数组录入。设备的每组 <code>loadPointShares</code> 必须合计 10000。</p>
+          <form id="configuration-form"><label>吊点 JSON<textarea name="loadPoints" rows="8" required></textarea></label><label>悬挂设备 JSON<textarea name="items" rows="10" required></textarea></label><label>操作人<input name="actor" required></label><div class="row"><button id="preflight-button" type="button">1. 预检差异</button><button id="configure-button" class="primary" disabled>2. 确认并送检</button></div></form>
+          <div id="preflight-result" class="preflight-result"></div>
+          <div id="load-summary" class="metrics"></div>
+        </details>
+        <details class="panel"><summary><span class="step">02</span> 双人检查</summary>
+          <form id="inspection-form"><div class="grid"><label>检查角色<select name="role"><option value="operator">吊挂操作员</option><option value="reviewer">独立安全复核员</option></select></label><label>检查者姓名<input name="inspectorName" required></label></div><fieldset><legend>必检项</legend><div id="checks" class="checks"></div></fieldset><label>发现问题 JSON（可为空数组）<textarea name="findings" rows="4">[]</textarea></label><label>操作人<input name="actor" required></label><button class="primary">提交本次检查</button></form>
+          <div id="inspection-list"></div>
+        </details>
+        <details class="panel"><summary><span class="step">03</span> 问题整改与复核</summary><div id="finding-list"><p class="muted">暂无问题。</p></div></details>
+        <details class="panel"><summary><span class="step">04</span> 分阶段试吊</summary>
+          <form id="trial-standard-form" class="subpanel"><h3>主管确认当前配置判定标准</h3><p class="hint">标准绑定当前配置版本，确认后用于本次完整试吊或补测。</p><div id="standard-stages" class="trial-stages"></div><div class="grid"><label>满载保持后允许回差 mm<input name="allowedReboundMm" type="number" min="0" value="3" required></label><label>总时限秒<input name="maxTotalDurationSec" type="number" min="1" max="1800" value="1200" required></label></div><label>舞台机械主管<input name="actor" required></label><button>确认并锁定标准</button></form>
+          <div id="standard-summary"></div>
+          <form id="trial-form"><div class="grid"><label>试吊操作员<input name="operatorName" required></label><label>操作人<input name="actor" required></label></div><p class="hint">严格按四阶段提交；超时、失稳、挠度或回差超限会自动判定失败并建立阻断问题。</p><div id="trial-stages" class="trial-stages"></div><label>人工异常 JSON<textarea name="anomalies" rows="3">[]</textarea></label><button class="primary">记录试吊结论</button></form>
+          <div id="trial-list"></div>
+        </details>
+        <details class="panel"><summary><span class="step">05</span> 冻结与签发</summary>
+          <div class="danger-zone"><p>冻结后不能再修改载荷、检查、问题或试吊数据。</p><label>当前操作人<input id="release-actor"></label><div class="row"><button id="freeze-button" type="button" class="danger">确认冻结清单</button><button id="issue-button" type="button" class="primary">主管签发凭据</button></div></div>
+          <div id="credential-card"></div>
+        </details>
+        <details class="panel"><summary><span class="step">06</span> 审计轨迹</summary><ol id="timeline" class="timeline"></ol></details>
+      </div>
+      <section id="verification" class="panel" hidden><h2>凭据核验结果</h2><div id="verification-body"></div></section>
+    </section>
+  </main>
+  <template id="finding-template"><article class="finding"><div class="finding-head"><strong></strong><span></span></div><p></p><div class="remediation-history"></div><form class="remediate-form"><label>整改说明<input name="note" maxlength="2000" required></label><label>证据摘要<input name="evidenceDigest" minlength="8" maxlength="500" required></label><label>整改人<input name="actor" maxlength="80" required></label><button>提交新一轮整改</button></form><form class="review-form"><div class="grid"><label>复核决定<select name="decision"><option value="approved">通过并关闭</option><option value="rejected">驳回整改</option></select></label><label>独立复核人<input name="reviewer" maxlength="80" required></label></div><label>驳回原因（驳回时必填）<input name="rejectionReason" maxlength="1000"></label><label>操作人<input name="actor" maxlength="80" required></label><button>提交本轮复核决定</button></form></article></template>
+  <script src="/app.js" defer></script>
+</body>
+</html>
