@@ -71,21 +71,26 @@ func (s *Service) RecordTrial(cmd RecordTrial) (*rigging.ClearanceCase, error) {
 	if e != nil {
 		return nil, normalize(e)
 	}
-	events := []rigging.Event{event}
-	if trial.Result == "failed" {
-		failureJSON, _ := json.Marshal(trial.FailureReasons)
-		stage := ""
-		if len(trial.FailureReasons) > 0 {
-			stage = trial.FailureReasons[0].Stage
-		}
-		finding := rigging.SafetyFinding{ID: newID("finding"), CaseID: c.ID, Severity: "blocking", Description: "试吊自动判定失败：" + string(failureJSON), Status: "open", ReportedBy: trial.OperatorName, LinkedTrialID: trial.ID, FailedStage: stage}
-		findingEvent, err := rigging.NewEvent(rigging.EventFindingAdded, c.ID, "系统试吊判定", completed, rigging.FindingData{Finding: finding})
-		if err != nil {
-			return nil, normalize(err)
-		}
-		events = append(events, findingEvent)
+	result, err := s.commit(cmd.CommandMeta, []rigging.Event{event}, request)
+	if err != nil || trial.Result != "failed" {
+		return result, err
 	}
-	return s.commit(cmd.CommandMeta, events, request)
+
+	failureJSON, _ := json.Marshal(trial.FailureReasons)
+	stage := ""
+	if len(trial.FailureReasons) > 0 {
+		stage = trial.FailureReasons[0].Stage
+	}
+	findingAt := s.now().UTC()
+	finding := rigging.SafetyFinding{ID: newID("finding"), CaseID: c.ID, Severity: "blocking", Description: "试吊自动判定失败：" + string(failureJSON), Status: "open", ReportedBy: trial.OperatorName, LinkedTrialID: trial.ID, FailedStage: stage}
+	findingEvent, err := rigging.NewEvent(rigging.EventFindingAdded, c.ID, "系统试吊判定", findingAt, rigging.FindingData{Finding: finding})
+	if err != nil {
+		return nil, normalize(err)
+	}
+	findingMeta := cmd.CommandMeta
+	findingMeta.ExpectedVersion = result.Version
+	findingMeta.IdempotencyKey += ":auto-finding"
+	return s.commit(findingMeta, []rigging.Event{findingEvent}, finding)
 }
 
 func (s *Service) Freeze(cmd FreezeManifest) (*rigging.ClearanceCase, error) {
