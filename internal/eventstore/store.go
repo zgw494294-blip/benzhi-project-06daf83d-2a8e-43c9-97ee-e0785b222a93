@@ -169,19 +169,9 @@ func (s *Store) Commit(expected int, events []rigging.Event, actor, key string, 
 	if expected != actual {
 		return nil, false, &VersionConflict{Expected: expected, Actual: actual}
 	}
-	working := &rigging.ClearanceCase{}
-	if c != nil {
-		working, err = rigging.Clone(c)
-		if err != nil {
-			return nil, false, err
-		}
-	}
 	for _, event := range events {
 		if event.CaseID != caseID {
 			return nil, false, errors.New("一次提交不能跨档案")
-		}
-		if err = rigging.Apply(working, event); err != nil {
-			return nil, false, err
 		}
 	}
 	frame := Frame{SchemaVersion: schemaVersion, Sequence: s.sequence + 1, PreviousDigest: s.lastDigest, Events: events}
@@ -189,14 +179,14 @@ func (s *Store) Commit(expected int, events []rigging.Event, actor, key string, 
 		payloadSum := sha256.Sum256(event.Data)
 		frame.Audits = append(frame.Audits, rigging.AuditEvent{Sequence: frame.Sequence, CaseID: caseID, EventType: event.Type, Actor: actor, OccurredAt: event.OccurredAt, IdempotencyKey: key, PayloadDigest: hex.EncodeToString(payloadSum[:]), PreviousDigest: s.lastDigest})
 	}
-	frame.Idempotency = &IdempotencyRecord{Key: key, RequestDigest: requestDigest, CaseID: caseID, Version: working.Version}
+	frame.Idempotency = &IdempotencyRecord{Key: key, RequestDigest: requestDigest, CaseID: caseID, Version: expected + len(events)}
 	if err = sealFrame(&frame); err != nil {
 		return nil, false, err
 	}
-	if err = s.appendFrame(frame); err != nil {
+	if err = s.applyFrame(frame); err != nil {
 		return nil, false, err
 	}
-	if err = s.applyFrame(frame); err != nil {
+	if err = s.appendFrame(frame); err != nil {
 		return nil, false, err
 	}
 	s.sequence = frame.Sequence
@@ -204,7 +194,7 @@ func (s *Store) Commit(expected int, events []rigging.Event, actor, key string, 
 	if err = s.saveSnapshot(); err != nil {
 		return nil, false, err
 	}
-	clone, err := rigging.Clone(working)
+	clone, err := rigging.Clone(s.cases[caseID])
 	return clone, false, err
 }
 
