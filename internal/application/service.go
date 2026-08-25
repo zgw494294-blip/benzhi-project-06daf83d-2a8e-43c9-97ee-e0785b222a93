@@ -69,14 +69,23 @@ func (s *Service) commit(meta CommandMeta, events []rigging.Event, request any) 
 	s.commitMu.Lock()
 	defer s.commitMu.Unlock()
 	c, _, err := s.store.Commit(meta.ExpectedVersion, events, meta.Actor, meta.IdempotencyKey, request)
+	if err != nil {
+		err = fmt.Errorf("提交事件到 eventstore: %w", err)
+	}
 	return c, normalize(err)
 }
 func (s *Service) load(id string) (*rigging.ClearanceCase, error) {
 	c, err := s.store.Get(id)
+	if err != nil {
+		err = fmt.Errorf("从 eventstore 加载档案 %s: %w", id, err)
+	}
 	return c, normalize(err)
 }
 
 func (s *Service) replay(key string, request any) (*rigging.ClearanceCase, bool, error) {
 	c, found, err := s.store.Replay(key, request)
+	if err != nil {
+		err = fmt.Errorf("从 eventstore 重放幂等请求 %s: %w", key, err)
+	}
 	return c, found, normalize(err)
 }

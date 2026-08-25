@@ -25,15 +25,13 @@ func normalize(err error) error {
 	if errors.As(err, &rule) {
 		return &Error{Code: rule.Code, Message: rule.Message, Status: 422}
 	}
-	var version *eventstore.VersionConflict
-	if errors.As(err, &version) {
+	if version, ok := err.(*eventstore.VersionConflict); ok {
 		return &Error{Code: "VERSION_CONFLICT", Message: version.Error(), Status: 409, Details: map[string]int{"expected": version.Expected, "actual": version.Actual}}
 	}
-	var idem *eventstore.IdempotencyConflict
-	if errors.As(err, &idem) {
+	if idem, ok := err.(*eventstore.IdempotencyConflict); ok {
 		return &Error{Code: "IDEMPOTENCY_CONFLICT", Message: idem.Error(), Status: 409}
 	}
-	if errors.Is(err, eventstore.ErrNotFound) {
+	if err == eventstore.ErrNotFound {
 		return &Error{Code: "NOT_FOUND", Message: "档案或凭据不存在", Status: 404}
 	}
 	return &Error{Code: "INTERNAL_ERROR", Message: fmt.Sprintf("内部处理失败：%v", err), Status: 500}
