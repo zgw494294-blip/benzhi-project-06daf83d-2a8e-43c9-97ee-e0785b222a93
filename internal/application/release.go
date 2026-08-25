@@ -133,13 +133,7 @@ func (s *Service) Issue(cmd IssueCredential) (*rigging.ClearanceCase, error) {
 	if clean(cmd.IssuedBy) == "" || !strings.EqualFold(clean(cmd.IssuedBy), clean(c.ManagerName)) {
 		return nil, normalize(rigging.Rule("MANAGER_REQUIRED", "凭据必须由档案中的舞台机械主管签发"))
 	}
-	all, _ := s.store.List()
-	sequence := 1
-	for _, item := range all {
-		if item.Credential != nil {
-			sequence++
-		}
-	}
+	sequence := s.nextCredentialSequence + 1
 	now := s.now().UTC()
 	number := fmt.Sprintf("RC-%s-%04d-%s", c.PerformanceAt.UTC().Format("20060102"), sequence, shortID(c.ID))
 	credential := rigging.ReleaseCredential{Number: number, CaseID: c.ID, Sequence: sequence, FrozenVersion: c.Version, ManifestDigest: c.ManifestDigest, PerformanceAt: c.PerformanceAt, IssuedBy: clean(cmd.IssuedBy), IssuedAt: now}
@@ -148,7 +142,11 @@ func (s *Service) Issue(cmd IssueCredential) (*rigging.ClearanceCase, error) {
 		return nil, normalize(e)
 	}
 	result, _, err := s.store.Commit(cmd.ExpectedVersion, []rigging.Event{event}, cmd.Actor, cmd.IdempotencyKey, cmd)
-	return result, normalize(err)
+	if err != nil {
+		return nil, normalize(err)
+	}
+	s.nextCredentialSequence = sequence
+	return result, nil
 }
 
 func shortID(id string) string {
