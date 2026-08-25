@@ -169,6 +169,17 @@ func (s *Store) Commit(expected int, events []rigging.Event, actor, key string, 
 	if expected != actual {
 		return nil, false, &VersionConflict{Expected: expected, Actual: actual}
 	}
+	previousSequence := s.sequence
+	previousDigest := s.lastDigest
+	previousAudits := append([]rigging.AuditEvent(nil), s.audits[caseID]...)
+	previousIdempotency, hadPreviousIdempotency := s.idempotency[key]
+	var previousCase *rigging.ClearanceCase
+	if c != nil {
+		previousCase, err = rigging.Clone(c)
+		if err != nil {
+			return nil, false, err
+		}
+	}
 	working := &rigging.ClearanceCase{}
 	if c != nil {
 		working, err = rigging.Clone(c)
@@ -202,6 +213,23 @@ func (s *Store) Commit(expected int, events []rigging.Event, actor, key string, 
 	s.sequence = frame.Sequence
 	s.lastDigest = frame.Checksum
 	if err = s.saveSnapshot(); err != nil {
+		s.sequence = previousSequence
+		s.lastDigest = previousDigest
+		if previousCase == nil {
+			delete(s.cases, caseID)
+		} else {
+			s.cases[caseID] = previousCase
+		}
+		if len(previousAudits) == 0 {
+			delete(s.audits, caseID)
+		} else {
+			s.audits[caseID] = previousAudits
+		}
+		if hadPreviousIdempotency {
+			s.idempotency[key] = previousIdempotency
+		} else {
+			delete(s.idempotency, key)
+		}
 		return nil, false, err
 	}
 	clone, err := rigging.Clone(working)
